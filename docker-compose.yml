@@ -1,0 +1,120 @@
+name: portfolio-stack
+
+networks:
+  appnet:
+
+volumes:
+  web_node_modules:
+  n8n_data:
+  n8n_db_data:
+
+services:
+  # =======================================
+  # Next.js 15 (React 19)
+  # =======================================
+  web:
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile
+      target: ${DOCKER_TARGET:-dev}
+    container_name: web
+    env_file: .env
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    networks: [appnet]
+    depends_on:
+      n8n:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+      - web_node_modules:/app/node_modules
+    command: >
+      sh -c "
+        if [ \"${DOCKER_TARGET}\" = \"prod\" ]; then
+          node server.js
+        else
+          npm run dev
+        fi
+      "
+    profiles: ["dev"]
+
+  # =======================================
+  # Production container (จาก CI/CD)
+  # =======================================
+  web-prod:
+    image: ${WEB_IMAGE:-ghcr.io/OWNER/REPO/boom-portfolio:latest}
+    container_name: web-prod
+    env_file: .env
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    networks: [appnet]
+    depends_on:
+      n8n:
+        condition: service_healthy
+    profiles: ["prod"]
+
+  # =======================================
+  # n8n + Postgres
+  # =======================================
+  n8n-db:
+    image: postgres:15
+    container_name: n8n-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${N8N_DB_USER:-n8n}
+      POSTGRES_PASSWORD: ${N8N_DB_PASSWORD:-n8npass}
+      POSTGRES_DB: ${N8N_DB_NAME:-n8n}
+    volumes:
+      - n8n_db_data:/var/lib/postgresql/data
+      # 👇 รันสคริปต์สร้าง schema/tables อัตโนมัติครั้งแรก
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks: [appnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${N8N_DB_USER:-n8n} -d ${N8N_DB_NAME:-n8n} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      N8N_HOST: ${N8N_HOST:-localhost}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      WEBHOOK_TUNNEL_URL: ${N8N_WEBHOOK_TUNNEL_URL:-}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change_this_key}
+
+      # DB config
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: n8n-db
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME:-n8n}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER:-n8n}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD:-n8npass}
+
+      GENERIC_TIMEZONE: Asia/Bangkok
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "336"
+
+      # 👇 (ทางเลือก) auto-import workflows เมื่อรันครั้งแรก
+      N8N_IMPORT_EXPORT_DIR: /data/import
+      N8N_IMPORT_WORKFLOWS: "true"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      # 👇 วางไฟล์ workflow .json ไว้ที่ ./docker/n8n/workflows
+      - ./docker/n8n/workflows:/data/import
+    depends_on:
+      n8n-db:
+        condition: service_healthy
+    networks: [appnet]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
