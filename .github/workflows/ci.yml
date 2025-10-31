@@ -12,7 +12,7 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/boom-portfolio
+      IMAGE_NAME: ghcr.io/${{ github.repository }}/portfolio
       DOCKERFILE: docker/web/Dockerfile
     steps:
       - uses: actions/checkout@v4
@@ -23,7 +23,7 @@ jobs:
           cache: 'npm'
 
       - name: Install deps
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Build Next.js
         run: npm run build
